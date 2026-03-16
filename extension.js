@@ -8,6 +8,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 
 const BAT_PATH = '/sys/class/power_supply/qcom-battmgr-bat';
 const UCSI_PATH = '/sys/class/power_supply/ucsi-source-psy-pmic_glink.ucsi.01';
+const THERMAL_BASE = '/sys/class/thermal';
 const UPDATE_INTERVAL = 5; // seconds
 
 function readSysfs(path) {
@@ -19,6 +20,33 @@ function readSysfs(path) {
         }
     } catch (e) {
         // ignore
+    }
+    return null;
+}
+
+function getAvgCpuTemp() {
+    let sum = 0;
+    let count = 0;
+    // Scan thermal zones for cpu*-top-thermal (per-core top-of-die sensors)
+    for (let i = 0; i < 50; i++) {
+        const zoneType = readSysfs(`${THERMAL_BASE}/thermal_zone${i}/type`);
+        if (!zoneType)
+            continue;
+        if (/^cpu\d+-\d+-top-thermal$/.test(zoneType)) {
+            const temp = readSysfs(`${THERMAL_BASE}/thermal_zone${i}/temp`);
+            if (temp) {
+                sum += parseInt(temp, 10);
+                count++;
+            }
+        }
+    }
+    return count > 0 ? Math.round(sum / count / 1000) : null;
+}
+
+function getBattTemp() {
+    const temp = readSysfs(`${BAT_PATH}/temp`);
+    if (temp) {
+        return Math.round(parseInt(temp, 10) / 10);
     }
     return null;
 }
@@ -44,18 +72,11 @@ class BatteryWattageIndicator extends PanelMenu.Button {
     }
 
     _update() {
-        const capacityStr = readSysfs(`${BAT_PATH}/capacity`);
         const powerStr = readSysfs(`${BAT_PATH}/power_now`);
         const statusStr = readSysfs(`${BAT_PATH}/status`);
         const ucsiCurrentStr = readSysfs(`${UCSI_PATH}/current_now`);
 
-        if (!capacityStr || !powerStr) {
-            this._label.set_text('--% --W');
-            return;
-        }
-
-        const percent = parseInt(capacityStr, 10);
-        const battPowerUw = parseInt(powerStr, 10);
+        const battPowerUw = powerStr ? parseInt(powerStr, 10) : 0;
         const battWatts = (battPowerUw / 1000000).toFixed(1);
 
         // Estimate total input power from UCSI current (assumes 20V PD)
@@ -64,19 +85,29 @@ class BatteryWattageIndicator extends PanelMenu.Button {
             ? (ucsiCurrentUa / 1000000 * 20).toFixed(0)
             : null;
 
-        let text = '';
+        // Temps
+        const cpuTemp = getAvgCpuTemp();
+        const battTemp = getBattTemp();
+        const tempStr = [
+            cpuTemp !== null ? `CPU ${cpuTemp}\u00B0` : null,
+            battTemp !== null ? `BAT ${battTemp}\u00B0` : null,
+        ].filter(Boolean).join(' ');
+
+        // Power
+        let powerText = '';
         if (statusStr === 'Charging') {
             if (totalInputW && parseInt(totalInputW) > 0)
-                text = `\uD83D\uDD0B${battWatts}W \u26A1${totalInputW}W`;
+                powerText = `\uD83D\uDD0B${battWatts}W \u26A1${totalInputW}W`;
             else
-                text = `\uD83D\uDD0B${battWatts}W`;
+                powerText = `\uD83D\uDD0B${battWatts}W`;
         } else if (statusStr === 'Discharging') {
-            text = `\uD83D\uDD0B-${battWatts}W`;
+            powerText = `\uD83D\uDD0B-${battWatts}W`;
         } else {
-            text = `\uD83D\uDD0B`;
+            powerText = `\uD83D\uDD0B`;
         }
 
-        this._label.set_text(text);
+        const parts = [powerText, tempStr].filter(Boolean);
+        this._label.set_text(parts.join(' \u2502 '));
     }
 
     destroy() {
