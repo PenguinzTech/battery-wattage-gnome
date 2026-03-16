@@ -1,0 +1,8 @@
+{
+  "uuid": "battery-wattage@x1e-pd-fix",
+  "name": "Battery Wattage",
+  "description": "Shows battery percentage and charging/discharging wattage in the top panel",
+  "shell-version": ["49"],
+  "version": 1,
+  "url": "https://github.com/PenguinzTech/battery-wattage-gnome"
+}
